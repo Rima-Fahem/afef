@@ -2,7 +2,7 @@ services:
   - type: worker
     name: mqtt-sender
     runtime: python
-    repo: https://github.com/Rima-Fahem/mqtt-project
+    repo: https://github.com/Rima-Fahem/afef.git
     branch: main
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python afef.py"
