@@ -1,8 +1,21 @@
+import threading
+from flask import Flask
 import paho.mqtt.client as mqtt
 import time
 import json
 import random
 
+# === Flask server (pour empêcher mise en veille) ===
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Service MQTT actif"
+
+def run_flask():
+    app.run(host="0.0.0.0", port=10000)  # Port HTTP obligatoire pour Render
+
+# === Script MQTT existant ===
 broker = "broker.emqx.io"
 port = 1883
 topic = "module"
@@ -10,12 +23,11 @@ topic = "module"
 client = mqtt.Client()
 client.connect(broker, port)
 
-# Valeurs de base mises à jour
 base_module = {
     "module_id": "bat1.m1",
     "tension": 52,
     "courant": 0.0,
-    "soc": 28,  # Peut rester dynamique si souhaité
+    "soc": 28,
     "temperature_zone1": 21.0,
     "temperature_zone2": 21.0,
     "temperature_zone3": 21.0,
@@ -38,20 +50,16 @@ def generate_dynamic_module(base):
         "cycle_vie": base["cycle_vie"] + random.randint(0, 0)
     }
 
-while True:
-    module_data = generate_dynamic_module(base_module)
-    
-    data = module_data
-        
-    
+def mqtt_loop():
+    while True:
+        data = generate_dynamic_module(base_module)
+        payload = json.dumps(data)
+        print(f"Envoi vers MQTT: {payload}")
+        client.publish(topic, payload)
+        client.loop()
+        time.sleep(60)
 
-    payload = json.dumps(data)
-    print(f"Taille du message : {len(payload)} bytes")
-    result = client.publish(topic, payload, qos=1)
-    client.loop()
-    status = result[0]
-    if status == 0:
-        print(f"Message envoyé sur {topic}: {payload}")
-    else:
-        print("Échec d'envoi")
-    time.sleep(60)
+# === Lancer le serveur Flask et la boucle MQTT en parallèle ===
+if __name__ == "__main__":
+    threading.Thread(target=run_flask).start()
+    mqtt_loop()
