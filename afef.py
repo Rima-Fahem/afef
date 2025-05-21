@@ -4,62 +4,101 @@ import paho.mqtt.client as mqtt
 import time
 import json
 import random
+import os
 
-# === Flask server (pour empêcher mise en veille) ===
+# === Flask app pour garder l'app vivante ===
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Service MQTT actif"
+    return "✅ Service MQTT actif"
 
 def run_flask():
-    app.run(host="0.0.0.0", port=10000)  # Port HTTP obligatoire pour Render
+    port = int(os.environ.get("PORT", 10000))  # Support Render
+    app.run(host="0.0.0.0", port=port)
 
-# === Script MQTT existant ===
+# === Configuration MQTT ===
 broker = "broker.emqx.io"
-port = 1883
+port_mqtt = 1883
 topic = "module"
 
 client = mqtt.Client()
-client.connect(broker, port)
+client.connect(broker, port_mqtt)
 
+# === État initial ===
 base_module = {
     "module_id": "bat1.m1",
-    "tension": 52,
+    "tension": 52.0,
     "courant": 0.0,
-    "soc": 28,
+    "soc": 100.0,
     "temperature_zone1": 21.0,
     "temperature_zone2": 21.0,
     "temperature_zone3": 21.0,
     "temperature_zone4": 21.0,
-    "puissance_consomme": 0,
+    "puissance_consomme": 0.0,
     "cycle_vie": 200
 }
 
-def generate_dynamic_module(base):
+# Mode initial
+mode = "decharge"
+
+def simulate_module(state, mode):
+    if mode == "decharge":
+        courant = round(random.uniform(5, 50), 2)
+    else:
+        courant = round(random.uniform(-50, -5), 2)
+
+    tension = round(state["tension"] + courant * 0.01 + random.uniform(-0.2, 0.2), 2)
+    tension = max(48.0, min(54.0, tension))
+
+    puissance = round(abs(tension * courant), 2)
+
+    if mode == "decharge":
+        soc_variation = -puissance * 0.000444
+    else:
+        soc_variation = puissance * 0.000444
+
+    nouveau_soc = max(0, min(100, state["soc"] + soc_variation))
+
+    temp_base = 21.0 + random.uniform(-0.5, 0.5)
+    temp_variation = puissance * 0.0005
+
     return {
-        "module_id": base["module_id"],
-        "tension": round(base["tension"] + random.uniform(-0.05, 0.05), 2),
-        "courant": round(base["courant"] + random.uniform(0, 0), 2),
-        "soc": max(0, min(100, base["soc"] + random.randint(0, 0))),
-        "temperature_zone1": round(base["temperature_zone1"] + random.uniform(-0.3, 0.3), 1),
-        "temperature_zone2": round(base["temperature_zone2"] + random.uniform(-0.3, 0.3), 1),
-        "temperature_zone3": round(base["temperature_zone3"] + random.uniform(-0.3, 0.3), 1),
-        "temperature_zone4": round(base["temperature_zone4"] + random.uniform(-0.3, 0.3), 1),
-        "puissance_consomme": max(0, base["puissance_consomme"] + random.randint(0, 0)),
-        "cycle_vie": base["cycle_vie"] + random.randint(0, 0)
+        "module_id": state["module_id"],
+        "tension": tension,
+        "courant": courant,
+        "soc": round(nouveau_soc, 2),
+        "temperature_zone1": round(temp_base + temp_variation, 1),
+        "temperature_zone2": round(temp_base + temp_variation + random.uniform(-0.3, 0.3), 1),
+        "temperature_zone3": round(temp_base + temp_variation + random.uniform(-0.3, 0.3), 1),
+        "temperature_zone4": round(temp_base + temp_variation + random.uniform(-0.3, 0.3), 1),
+        "puissance_consomme": puissance,
+        "cycle_vie": state["cycle_vie"] + (1 if mode == "decharge" and nouveau_soc == 0 else 0)
     }
 
 def mqtt_loop():
+    global mode
     while True:
-        data = generate_dynamic_module(base_module)
-        payload = json.dumps(data)
-        print(f"Envoi vers MQTT: {payload}")
-        client.publish(topic, payload)
+        module_data = simulate_module(base_module, mode)
+        base_module.update(module_data)
+
+        # Passage décharge <-> recharge
+        if mode == "decharge" and base_module["soc"] <= 0:
+            print("🔋 SOC 0% atteint → RECHARGE")
+            mode = "recharge"
+        elif mode == "recharge" and base_module["soc"] >= 100:
+            print("⚡ SOC 100% atteint → DÉCHARGE")
+            mode = "decharge"
+
+        print(f"[{mode.upper()}] SOC: {base_module['soc']}% | Courant: {base_module['courant']}A | Tension: {base_module['tension']}V | Puissance: {base_module['puissance_consomme']}W")
+
+        payload = json.dumps(module_data)
+        client.publish(topic, payload, qos=1)
         client.loop()
+
         time.sleep(60)
 
-# === Lancer le serveur Flask et la boucle MQTT en parallèle ===
+# === Lancement en parallèle ===
 if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
     mqtt_loop()
