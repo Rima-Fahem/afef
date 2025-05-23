@@ -53,12 +53,13 @@ def simulate_module(state, mode):
 
     puissance = round(abs(tension * courant), 2)
 
-    if mode == "decharge":
-        soc_variation = -puissance * 0.000444
-    else:
-        soc_variation = puissance * 0.000444
+    # Variation SOC : 16% par étape (pour aller de 100% à 20% en 5 pas)
+    soc_step = 16.0
 
-    nouveau_soc = max(0, min(100, state["soc"] + soc_variation))
+    if mode == "decharge":
+        nouveau_soc = max(20.0, state["soc"] - soc_step)
+    else:
+        nouveau_soc = min(100.0, state["soc"] + soc_step)
 
     temp_base = 21.0 + random.uniform(-0.5, 0.5)
     temp_variation = puissance * 0.0005
@@ -73,8 +74,9 @@ def simulate_module(state, mode):
         "temperature_zone3": round(temp_base + temp_variation + random.uniform(-0.3, 0.3), 1),
         "temperature_zone4": round(temp_base + temp_variation + random.uniform(-0.3, 0.3), 1),
         "puissance_consomme": puissance,
-        "cycle_vie": state["cycle_vie"] + (1 if mode == "decharge" and nouveau_soc == 0 else 0)
+        "cycle_vie": state["cycle_vie"]
     }
+
 
 def mqtt_loop():
     global mode
@@ -83,8 +85,8 @@ def mqtt_loop():
         base_module.update(module_data)
 
         # Passage décharge <-> recharge
-        if mode == "decharge" and base_module["soc"] <= 0:
-            print("🔋 SOC 0% atteint → RECHARGE")
+        if mode == "decharge" and base_module["soc"] <= 20:
+            print("🔋 SOC 20% atteint → RECHARGE")
             mode = "recharge"
         elif mode == "recharge" and base_module["soc"] >= 100:
             print("⚡ SOC 100% atteint → DÉCHARGE")
@@ -96,7 +98,7 @@ def mqtt_loop():
         client.publish(topic, payload, qos=1)
         client.loop()
 
-        time.sleep(60)
+        time.sleep(1800)
 
 # === Lancement en parallèle ===
 if __name__ == "__main__":
